@@ -1,6 +1,7 @@
 import { useNavigate } from "react-router-dom";
 import { useEffect, useState, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useGPS } from "../hooks/useGPS";
 
 const STEPS = [
   { id: "weather", label: "Fetching Live Weather Data",     icon: "🌦️" },
@@ -24,6 +25,7 @@ function Monitoring() {
   const [riskScore,   setRiskScore]   = useState(null);
   const [alertActive, setAlertActive] = useState(false);
   const pipelineStarted = useRef(false);
+  const { getLocation } = useGPS();
 
   const markStep = (id, status) =>
     setSteps(prev => prev.map(s => s.id === id ? { ...s, status } : s));
@@ -110,21 +112,54 @@ function Monitoring() {
         return;
       }
 
-      // STEP 3 — Fraud
+      // STEP 3 — Fraud (GPS + scoring)
       markStep("fraud", "running");
-      await delay(1500); // visible fraud check pause
+      await delay(1500);
+
+      // Capture real device GPS coords
+      let gpsCoords = null;
+      let gpsCheck  = null;
+      try {
+        gpsCoords = await getLocation();
+      } catch (_) {
+        // GPS denied — skip GPS check, continue with other fraud checks
+      }
+
+      if (gpsCoords) {
+        const gpsRes = await fetch("http://localhost:5001/fraud_check/gps", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id:          worker.workerId,
+            claim_id:         "",
+            current_location: gpsCoords,
+            timestamp:        new Date().toISOString(),
+          }),
+        });
+        gpsCheck = await gpsRes.json();
+
+        if (gpsCheck.gps_flag) {
+          markStep("fraud", "failed");
+          await delay(600);
+          setStatusMsg(`GPS spoofing detected — speed ${gpsCheck.calculated_speed} km/h exceeds 60 km/h limit for delivery workers. Over ${gpsCheck.distance} km in ${gpsCheck.time_minutes} min. Payout blocked.`);
+          setRejected(true);
+          claimedRef.current = false;
+          return;
+        }
+      }
+
       const fraudRes  = await fetch("http://localhost:4000/api/fraud/check", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workerName: worker.name, city }),
+        body: JSON.stringify({ workerName: worker.name, city, workerId: worker.workerId, rain }),
       });
       const fraudData = await fraudRes.json();
       await delay(1000);
 
-      if (fraudData.fraud) {
+      if (fraudData.fraud && fraudData.decision === "rejected") {
         markStep("fraud", "failed");
         await delay(600);
-        setStatusMsg(`Fraud detected: ${fraudData.reason}. Payout blocked.`);
+        setStatusMsg(`Fraud detected (score: ${fraudData.fraud_score}): ${fraudData.reason}. Payout blocked.`);
         setRejected(true);
         claimedRef.current = false;
         return;
@@ -134,12 +169,13 @@ function Monitoring() {
 
       // STEP 4 — Auto Claim
       markStep("claim", "running");
-      await delay(1500); // visible claim generation pause
+      await delay(1500);
       const claimRes  = await fetch("http://localhost:4000/api/claim", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           workerName:     worker.name,
+          workerId:       worker.workerId,
           city,
           disruptionType: "weather_disruption",
           rain,
@@ -160,6 +196,18 @@ function Monitoring() {
         return;
       }
 
+      // Simulate instant payout
+      const payoutRes = await fetch("http://localhost:4000/api/payout/simulate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          claim_id:     claimData.claim._id,
+          user_id:      worker.workerId,
+          payout_amount: claimData.payoutAmount,
+        }),
+      });
+      const payoutData = await payoutRes.json();
+
       markStep("claim", "done");
       localStorage.setItem("claim", JSON.stringify({
         disruptionType:  claimData.claim.disruptionType,
@@ -167,6 +215,11 @@ function Monitoring() {
         insurancePayout: claimData.payoutAmount,
         riskScore:       claimData.claim.riskScore,
         payoutTier:      claimData.claim.payoutTier,
+        transaction_id:  payoutData.transaction_id,
+        fraud_score:     fraudData.fraud_score,
+        fraud_decision:  fraudData.decision,
+        gps_speed:       gpsCheck?.calculated_speed ?? null,
+        gps_distance:    gpsCheck?.distance ?? null,
       }));
 
       setDone(true);

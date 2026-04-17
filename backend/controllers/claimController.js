@@ -11,7 +11,7 @@ export const createClaim = async (req, res) => {
 
   try {
 
-    const { workerName, city, disruptionType, rain, aqi, traffic, deliveries } = req.body
+    const { workerName, workerId, city, disruptionType, rain, aqi, traffic, deliveries } = req.body
 
     // ML risk check
     const riskResponse = await axios.post("http://localhost:5000/predict", {
@@ -33,12 +33,14 @@ export const createClaim = async (req, res) => {
 
     const claim = new Claim({
       workerName,
+      workerId: workerId || "",
       city,
       disruptionType,
       estimatedIncomeLoss,
       payoutAmount,
       riskScore,
       payoutTier: payout.tier,
+      status: "approved",
     })
 
     await claim.save()

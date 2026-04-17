@@ -11,6 +11,9 @@ import adminRoutes from "./routes/adminRoutes.js"
 import heatmapRoutes from "./routes/heatmapRoutes.js"
 import fraudRoutes from "./routes/fraudRoutes.js"
 import feedRoutes from "./routes/feedRoutes.js"
+import payoutRoutes from "./routes/payoutRoutes.js"
+import workerDashboardRoutes from "./routes/workerDashboardRoutes.js"
+import predictiveRoutes from "./routes/predictiveRoutes.js"
 
 dotenv.config()
 
@@ -27,6 +30,9 @@ app.use("/api/admin", adminRoutes)
 app.use("/api/heatmap", heatmapRoutes)
 app.use("/api/fraud", fraudRoutes)
 app.use("/api/feed", feedRoutes)
+app.use("/api/payout", payoutRoutes)
+app.use("/api/worker-dashboard", workerDashboardRoutes)
+app.use("/api/predictive", predictiveRoutes)
 
 mongoose.connect(process.env.MONGO_URI)
 .then(()=> {

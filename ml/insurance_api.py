@@ -3,6 +3,7 @@ from flask_cors import CORS
 from pymongo import MongoClient
 from datetime import datetime, timezone
 import random
+import math
 
 app = Flask(__name__)
 CORS(app)
@@ -12,6 +13,7 @@ db = client["trexa"]
 workers_col   = db["workers"]
 policies_col  = db["policies"]
 claims_col    = db["insurance_claims"]
+gps_logs_col  = db["gps_fraud_logs"]
 
 # ── Fixed disruption impact factors ──────────────────────────────────────────
 IMPACTS = {
@@ -225,6 +227,71 @@ def process_claim():
             { "$inc": { "weekly_payout_used": payout } }
         )
 
+        # ── GPS Spoofing Check ─────────────────────────────────────────────────────
+        gps_result   = {}
+        current_loc  = data.get("current_location")
+        current_ts   = data.get("timestamp", datetime.now(timezone.utc).isoformat())
+
+        if current_loc:
+            curr_lat  = float(current_loc.get("lat", 0))
+            curr_lng  = float(current_loc.get("lng", 0))
+            curr_time = datetime.fromisoformat(current_ts) if isinstance(current_ts, str) else current_ts
+            if curr_time.tzinfo is None:
+                curr_time = curr_time.replace(tzinfo=timezone.utc)
+
+            last_log = gps_logs_col.find_one({ "user_id": worker_id }, sort=[("timestamp", -1)])
+
+            gps_flag         = False
+            calculated_speed = 0.0
+            distance         = 0.0
+            time_minutes     = 0.0
+            fraud_points     = 0
+
+            if last_log:
+                prev_lat  = last_log["current_location"]["lat"]
+                prev_lng  = last_log["current_location"]["lng"]
+                prev_time = last_log["timestamp"]
+                if prev_time.tzinfo is None:
+                    prev_time = prev_time.replace(tzinfo=timezone.utc)
+
+                distance     = round(haversine(prev_lat, prev_lng, curr_lat, curr_lng), 4)
+                time_minutes = round((curr_time - prev_time).total_seconds() / 60, 4)
+
+                if time_minutes > 0:
+                    calculated_speed = round((distance / time_minutes) * 60, 2)
+
+                if calculated_speed > 60:
+                    gps_flag     = True
+                    fraud_points = 30
+
+            gps_logs_col.insert_one({
+                "user_id":           worker_id,
+                "claim_id":          str(claims_col.estimated_document_count()),
+                "previous_location": { "lat": last_log["current_location"]["lat"], "lng": last_log["current_location"]["lng"] } if last_log else None,
+                "current_location":  { "lat": curr_lat, "lng": curr_lng },
+                "distance_km":       distance,
+                "time_minutes":      time_minutes,
+                "calculated_speed":  calculated_speed,
+                "gps_flag":          gps_flag,
+                "fraud_points":      fraud_points,
+                "timestamp":         curr_time,
+            })
+
+            gps_result = {
+                "gps_flag":         gps_flag,
+                "calculated_speed": calculated_speed,
+                "distance":         distance,
+                "time_minutes":     time_minutes,
+                "fraud_points":     fraud_points,
+            }
+
+            if gps_flag:
+                return jsonify({
+                    "status":  "Rejected",
+                    "reason":  f"GPS spoofing detected — speed {calculated_speed} km/h over {distance} km in {time_minutes} min",
+                    "gps_check": gps_result,
+                })
+
         claim = {
             "worker_id":    worker_id,
             "city":         city,
@@ -233,6 +300,7 @@ def process_claim():
             "income_loss":  round(loss, 2),
             "timestamp":    datetime.now(timezone.utc),
             "status":       "Approved",
+            "gps_check":    gps_result,
         }
         claims_col.insert_one(claim)
 
@@ -241,6 +309,7 @@ def process_claim():
             "event_type":   event_type,
             "payout_amount": payout,
             "income_loss":  round(loss, 2),
+            "gps_check":    gps_result,
         })
 
     except Exception as e:
@@ -258,6 +327,92 @@ def get_claims():
             if isinstance(c.get("timestamp"), datetime):
                 c["timestamp"] = c["timestamp"].isoformat()
         return jsonify(claims)
+    except Exception as e:
+        return jsonify({ "error": str(e) }), 500
+
+
+# ── Haversine distance (km) ───────────────────────────────────────────────────
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371
+    d_lat = math.radians(lat2 - lat1)
+    d_lon = math.radians(lon2 - lon1)
+    a = math.sin(d_lat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(d_lon / 2) ** 2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+# ── POST /fraud_check/gps ─────────────────────────────────────────────────────
+@app.route("/fraud_check/gps", methods=["POST"])
+def gps_fraud_check():
+    try:
+        data             = request.json
+        user_id          = data.get("user_id")
+        claim_id         = data.get("claim_id", "")
+        current_location = data.get("current_location", {})
+        current_ts       = data.get("timestamp")
+
+        curr_lat = float(current_location.get("lat", 0))
+        curr_lng = float(current_location.get("lng", 0))
+        curr_time = datetime.fromisoformat(current_ts) if current_ts else datetime.now(timezone.utc)
+
+        # Fetch last known GPS log for this user
+        last_log = gps_logs_col.find_one(
+            { "user_id": user_id },
+            sort=[("timestamp", -1)]
+        )
+
+        gps_flag         = False
+        calculated_speed = 0.0
+        distance         = 0.0
+        time_minutes     = 0.0
+        fraud_points     = 0
+
+        if last_log:
+            prev_lat   = last_log["current_location"]["lat"]
+            prev_lng   = last_log["current_location"]["lng"]
+            prev_time  = last_log["timestamp"]
+
+            # Ensure both timestamps are timezone-aware
+            if prev_time.tzinfo is None:
+                prev_time = prev_time.replace(tzinfo=timezone.utc)
+            if curr_time.tzinfo is None:
+                curr_time = curr_time.replace(tzinfo=timezone.utc)
+
+            distance     = round(haversine(prev_lat, prev_lng, curr_lat, curr_lng), 4)
+            time_minutes = round((curr_time - prev_time).total_seconds() / 60, 4)
+
+            if time_minutes > 0:
+                # speed in km/h
+                calculated_speed = round((distance / time_minutes) * 60, 2)
+            else:
+                calculated_speed = 0.0
+
+            # Flag if speed > 60 km/h (delivery workers ride motorbikes in city traffic)
+            if calculated_speed > 60:
+                gps_flag     = True
+                fraud_points = 30
+
+        # Persist this GPS check
+        gps_logs_col.insert_one({
+            "user_id":          user_id,
+            "claim_id":         claim_id,
+            "previous_location": { "lat": last_log["current_location"]["lat"], "lng": last_log["current_location"]["lng"] } if last_log else None,
+            "current_location": { "lat": curr_lat, "lng": curr_lng },
+            "distance_km":      distance,
+            "time_minutes":     time_minutes,
+            "calculated_speed": calculated_speed,
+            "gps_flag":         gps_flag,
+            "fraud_points":     fraud_points,
+            "timestamp":        curr_time,
+        })
+
+        return jsonify({
+            "gps_flag":         gps_flag,
+            "calculated_speed": calculated_speed,
+            "distance":         distance,
+            "time_minutes":     time_minutes,
+            "fraud_points":     fraud_points,
+        })
+
     except Exception as e:
         return jsonify({ "error": str(e) }), 500
 

@@ -30,7 +30,7 @@ def predict():
     prediction = risk_model.predict(input_data)
 
     return jsonify({
-        "disruption_risk": int(prediction[0])
+        "disruption_risk": float(prediction[0])
     })
 
 

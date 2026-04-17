@@ -27,10 +27,11 @@ export const getWeather = async (req, res) => {
 
   } catch (error) {
 
-    console.error(error)
+    console.error("Weather API Error:", error.response?.data || error.message)
 
     res.status(500).json({
-      message:"Weather fetch failed"
+      message:"Weather fetch failed",
+      error: error.response?.data?.message || error.message
     })
 
   }

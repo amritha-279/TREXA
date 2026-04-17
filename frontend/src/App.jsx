@@ -12,6 +12,7 @@ import FinalPayout from "./pages/FinalPayout"
 import Claim from "./pages/Claim";
 import Navbar from "./components/Navbar"
 import AdminDashboard from "./pages/AdminDashboard";
+import PredictiveAnalytics from "./pages/PredictiveAnalytics";
 
 function PrivateRoute({ children }) {
   return localStorage.getItem("worker") ? children : <Navigate to="/register" replace />;
@@ -26,6 +27,7 @@ function App() {
         <Route path="/" element={<Landing />} />
         <Route path="/register" element={<Register />} />
         <Route path="/admin" element={<AdminDashboard />} />
+        <Route path="/predictive" element={<PredictiveAnalytics />} />
         <Route path="/dashboard"   element={<PrivateRoute><Dashboard /></PrivateRoute>} />
         <Route path="/risk"        element={<PrivateRoute><RiskProfile /></PrivateRoute>} />
         <Route path="/plans"       element={<PrivateRoute><Plans /></PrivateRoute>} />

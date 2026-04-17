@@ -35,24 +35,27 @@ function AdminDashboard() {
   const [claims,       setClaims]       = useState([]);
   const [fraudAlerts,  setFraudAlerts]  = useState([]);
   const [logs,         setLogs]         = useState([]);
+  const [predictive,   setPredictive]   = useState(null);
 
   async function fetchAll() {
     try {
-      const [dashRes, disRes, clRes, frRes, logRes] = await Promise.all([
+      const [dashRes, disRes, clRes, frRes, logRes, predRes] = await Promise.all([
         fetch(`${BASE}/dashboard`),
         fetch(`${BASE}/disruptions`),
         fetch(`${BASE}/claims`),
         fetch(`${BASE}/fraud-alerts`),
         fetch(`${BASE}/logs`),
+        fetch("http://localhost:4000/api/predictive"),
       ]);
-      const [dash, dis, cl, fr, log] = await Promise.all([
-        dashRes.json(), disRes.json(), clRes.json(), frRes.json(), logRes.json(),
+      const [dash, dis, cl, fr, log, pred] = await Promise.all([
+        dashRes.json(), disRes.json(), clRes.json(), frRes.json(), logRes.json(), predRes.json(),
       ]);
       setStats({ workers: dash.totalWorkers, disruptions: dash.highRiskWorkers, claims: dash.totalClaims, fraudAlerts: fr.length });
       setDisruptions(dis);
       setClaims(cl);
       setFraudAlerts(fr);
       setLogs(log);
+      setPredictive(pred);
     } catch (err) {
       console.error(err);
     }
@@ -214,6 +217,33 @@ function AdminDashboard() {
             </table>
           </div>
         </motion.div>
+
+        {/* ── Phase 3: Business + Predictive Summary ── */}
+        {predictive && (
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.18 }}
+            className="bg-gradient-to-br from-indigo-600 to-purple-700 rounded-3xl p-6 shadow-xl mb-10 text-white"
+          >
+            <p className="text-xs font-bold uppercase tracking-widest text-indigo-200 mb-5">Predictive Analytics — Next Week Forecast</p>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="bg-white/10 rounded-2xl p-4 text-center">
+                <p className="text-2xl font-black">{predictive.predictedRainRiskPercent}%</p>
+                <p className="text-indigo-200 text-xs mt-1">Rain Risk</p>
+              </div>
+              <div className="bg-white/10 rounded-2xl p-4 text-center">
+                <p className="text-2xl font-black">{predictive.expectedClaimsNextWeek}</p>
+                <p className="text-indigo-200 text-xs mt-1">Expected Claims</p>
+              </div>
+              <div className="bg-white/10 rounded-2xl p-4 text-center">
+                <p className="text-2xl font-black">₹{predictive.forecastedPayout?.toLocaleString("en-IN")}</p>
+                <p className="text-indigo-200 text-xs mt-1">Forecasted Payout</p>
+              </div>
+              <div className="bg-white/10 rounded-2xl p-4 text-center">
+                <p className={`text-2xl font-black ${predictive.lossRatio > 80 ? "text-red-300" : "text-green-300"}`}>{predictive.lossRatio}%</p>
+                <p className="text-indigo-200 text-xs mt-1">Loss Ratio</p>
+              </div>
+            </div>
+          </motion.div>
+        )}
 
         {/* ── Fraud Alerts + System Log side by side ── */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-10">
